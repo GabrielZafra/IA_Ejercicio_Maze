@@ -1,7 +1,9 @@
 using System.Collections;
 using System.Collections.Generic;
+using System.IO;
 using System.Linq;
 using System.Linq.Expressions;
+using System.Security.Cryptography.X509Certificates;
 using UnityEngine;
 using UnityEngine.InputSystem;
 
@@ -42,7 +44,7 @@ public class PathMarker
         }
         else
         {
-            return location.Equals(((PathMarker) obj).location);
+            return location.Equals(((PathMarker)obj).location);
         }
     }
 
@@ -131,21 +133,21 @@ public class FindPathAStar : MonoBehaviour
         // Este nodo empieza con su valor de la heurística (distancia euclidea hasta el objetivo).
         float h_n = Vector2.Distance(locations[0].ToVector(), goalNode.location.ToVector());
         GameObject startBlock = Instantiate(start, startLocation, Quaternion.identity);
-        
+
         startNode = new PathMarker(locations[0], 0, h_n, startBlock, null);
-        
+
         TextMesh[] values = startBlock.GetComponentsInChildren<TextMesh>();
         values[0].text = "g(n): " + startNode.G.ToString("0.00");
         values[1].text = "h(n): " + startNode.H.ToString("0.00");
         values[2].text = "f(n): " + startNode.F.ToString("0.00");
-        
+
 
         //Eliminamos lo que contenga las listas de OPEN y CLOSED por si se ha vuelto a ejecutar el algoritmo
         open.Clear();
         closed.Clear();
 
         //Comenzamos añadiendo el nodo startNode a CLOSED
-        closed.Add(startNode); 
+        closed.Add(startNode);
 
         //Y para cuestiones relacionadas con la UI, almacenamos una referencia al nodo inicial en lastPos, por ahora
         lastPos = startNode;
@@ -155,46 +157,69 @@ public class FindPathAStar : MonoBehaviour
     void Search(PathMarker thisNode)
     {
         //Este método ejecutará la búsqueda para encontrar el camino
+        print(done);
 
-        // Si el algortmo aún no ha comenzado, salimos sin hacer nada
+        if (!algorithmStarted) { return; } // Si el algortmo aún no ha comenzado, salimos sin hacer nada
 
-        //Comprobamos si este nodo desde donde empezamos es ya solución
+        if (thisNode.location.Equals(goalNode.location)) { done = true; return; } //Comprobamos si este nodo desde donde empezamos es ya solución
 
         //Comenzamos buscando vecinos de este nodo
         // MapLocation almacena una coordenada x,z y también una lista de posibles direcciones (adelante/atrás/izquierda/derecha)
-            //Inicializamos la localizacion "neighbour"
-            //Ojo, en este punto neighbour es solo una posicion en el mapa
+        //Inicializamos la localizacion "neighbour"
+        //Ojo, en este punto neighbour es solo una posicion en el mapa
+
+        foreach (MapLocation m in maze.directions)
+        {
+            MapLocation neighbour = thisNode.location + m;
 
             //Antes de procesar este vecino chequeamos que cumpla ciertas condiciones:
             //Antes de procesarlo, nos preguntamos:
             //1.- ¿Es un muro? Si es así, continuamos el bucle
-
+            if (maze.map[neighbour.x, neighbour.z] == 1) { continue; }
             //2.- En esta dirección, ¿Sigo dentro del laberinto? Tienes que estar entre 1 y maze.width para el eje X o entre 1 y maze.depth para el eje Z
-
+            if ((neighbour.z <= 0 || neighbour.z >= maze.depth - 1) || (neighbour.x <= 0 || neighbour.x >= maze.width - 1)) { continue; }
             //3.- ¿He visitado ya al vecino en una iteración anterior? o lo que es lo mismo, ¿Está en CLOSED?
-
+            if (IsClosed(neighbour)) { continue; }
             //Aqui ya sabemos que el vecino es válido
             //Sumamos la G que teniamos a la distancia entre los nodos vecinos
-
+            float g = thisNode.G + Vector2.Distance(thisNode.location.ToVector(), neighbour.ToVector());
+            float h = Vector2.Distance(neighbour.ToVector(), goalNode.location.ToVector());
             //Creamos un gameObject "pathBlock" para poner en este punto de nuestro camino
-
+            Vector3 pos = new Vector3(neighbour.x * maze.scale, 0, neighbour.z * maze.scale);
+            GameObject pathBlock = Instantiate(pathP, pos, Quaternion.identity);
+            pathBlock.tag = "marker";
             //"pathBlock" tiene el texto G, F, H adjunto como subcomponentes, los inicializamos esto strings
+            TextMesh[] values = pathBlock.GetComponentsInChildren<TextMesh>();
+            PathMarker neighbourPathMaker = new PathMarker(neighbour, g, h, g + h, pathBlock, thisNode);
+            values[0].text = "g(n): " + neighbourPathMaker.G.ToString("0.00");
+            values[1].text = "h(n): " + neighbourPathMaker.H.ToString("0.00");
+            values[2].text = "f(n): " + neighbourPathMaker.F.ToString("0.00");
 
             //Ahora tenemos que comprobar si este nodo ya está en la lista de OPEN
             // Si está en la lista, actualizaremos sus valores para g(n) y h(n) , así como el padre que sera este ahora
             // Si no está lo añadiremos a la lista OPEN
             // Esta comprobación la puede realizar la función "UpdateMarker"
-        
+
+            if (!UpdateMarker(neighbour, g, h, g + h, thisNode)) { print("Open"); open.Add(neighbourPathMaker); }
+            else { Destroy(pathBlock); }
+        }
 
         //Ahora tenemos que elegir el siguiente nodo a expandir
         // De open, nos quedamos con el que menor f(n) tenga
+        PathMarker selectedPathMarker = open.OrderBy(p => p.F).ThenBy(p => p.H).FirstOrDefault();
+        if (selectedPathMarker == null) { done = true; return; }
+
         // Ese nodo lo añadimos a CLOSED
+        closed.Add(selectedPathMarker);
         // Lo quitamos de OPEN
+        open.Remove(selectedPathMarker);
         // Marcamos este PathMarker como nodo CLOSED
         // Quitamos el pathMaker de la open list
         // Indicamos, cambiando el material, que este marcador tendrá el color de los puntos "CLOSED"
+        if (selectedPathMarker.marker != null) selectedPathMarker.marker.GetComponent<MeshRenderer>().material = closedMaterial;
         // Indicamos que este es el lastPos donde nos hemos quedado
-        
+        lastPos = selectedPathMarker;
+
     }
     bool UpdateMarker(MapLocation pos, float g, float h, float f, PathMarker prt)
     {
@@ -220,37 +245,39 @@ public class FindPathAStar : MonoBehaviour
     bool IsClosed(MapLocation marker)
     {
         //Devolvemos TRUE si marker esta en la lista de closed
-        foreach(PathMarker p in closed)
+        foreach (PathMarker p in closed)
         {
             if (p.location.Equals(marker)) return true;
         }
         return false;
     }
 
-
-    // Start is called before the first frame update
-    void Start()
-    {
-        
-    }
-
-
-
     //TODO: Completad este método
     void GetPath()
     {
         //Este método dibujará el camino desde el inicio hasta el destino
-        
-            //Borrar todos los pathMakers
-            //Inicializamos begin a lastPos
 
-            //Mientras startNode no sea begin y begin no sea NULL
-            //    Instanciamos un nuevo pathMaker que senyalara el camino de vuelta
-            //    begin pasara ahora a señalar al su nodo padre
-         
+        //Borrar todos los pathMakers
+        RemoveAllMarkers();
+        //Inicializamos begin a lastPos
+        PathMarker begin = lastPos;
 
-            //Instanciamos un ultimo pathMaker que senyalara la posicion inicial
-        
+        //Mientras startNode no sea begin y begin no sea NULL
+        //    Instanciamos un nuevo pathMaker que senyalara el camino de vuelta
+        //    begin pasara ahora a señalar al su nodo padre
+
+        while (!begin.location.Equals(startNode.location) && begin != null)
+        {
+            Vector3 pos = new Vector3(begin.location.x * maze.scale, 0, begin.location.z * maze.scale);
+            GameObject pathBlock = Instantiate(pathP, pos, Quaternion.identity);
+            pathBlock.tag = "marker";
+            begin = begin.parent;
+        }
+
+        //Instanciamos un ultimo pathMaker que senyalara la posicion inicial
+        Vector3 newpos = new Vector3(startNode.location.x * maze.scale, 0, startNode.location.z * maze.scale);
+        GameObject newpathBlock = Instantiate(pathP, newpos, Quaternion.identity);
+        newpathBlock.tag = "marker";
     }
 
     void Search()
@@ -264,7 +291,7 @@ public class FindPathAStar : MonoBehaviour
         //Si presionamos la letra "P" inicializamos el juego
         if (Keyboard.current[Key.P].wasPressedThisFrame)
         {
-            
+
             BeginSearch();
 
         }
@@ -283,7 +310,7 @@ public class FindPathAStar : MonoBehaviour
         //Si presionamos la tecla A, se reproduce la búsqueda a modo animación con una frecuencia dada
         if (Keyboard.current[Key.A].wasPressedThisFrame)
         {
-            InvokeRepeating(nameof(Search), 1.0f,updateFreq);
+            InvokeRepeating(nameof(Search), 1.0f, updateFreq);
         }
     }
 }
